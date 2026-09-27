@@ -37,7 +37,8 @@
 [hidden]{display:none!important}
 html,body{height:100%;overflow:hidden}
 body{background:var(--bg);color:var(--text);font:14px/1.45 "Space Grotesk",sans-serif;
-  display:flex;flex-direction:column;user-select:none;-webkit-user-select:none}
+  display:flex;flex-direction:column;user-select:none;-webkit-user-select:none;
+  -webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 .mono{font-family:"IBM Plex Mono",monospace}
 button{font-family:inherit;color:inherit}
 .ic{width:16px;height:16px;flex-shrink:0}
@@ -69,18 +70,33 @@ canvas{-webkit-user-drag:none}
 .m-item small{display:block;color:var(--dim);font-size:11px;margin-top:2px}
 
 #main{flex:1;display:flex;min-height:0}
-#pal{width:158px;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:4px 0 24px;flex-shrink:0}
+#pal{width:158px;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:4px 0 24px;flex-shrink:0;
+  -webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 #pal::-webkit-scrollbar{width:8px}
 #pal::-webkit-scrollbar-thumb{background:var(--line2);border-radius:4px}
 .pal-h{font:600 10px "IBM Plex Mono",monospace;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);padding:14px 14px 7px}
+/* --- touch/iPad: items allow vertical scroll (pan-y); drag-to-canvas is handled in JS --- */
 .pal-item{display:block;width:100%;padding:6px 8px 8px;background:none;border:0;border-radius:8px;cursor:grab;
-  text-align:center;color:var(--dim);touch-action:none}
+  text-align:center;color:var(--dim);touch-action:pan-y}
 .pal-item:hover{background:var(--panel2);color:var(--text)}
 .pal-item.on{background:#241c0e;color:var(--amber);box-shadow:inset 0 0 0 1px #4a3812}
 .pal-item canvas{display:block;margin:0 auto 4px;pointer-events:none}
 .pal-item span{font-weight:600;font-size:11.5px;letter-spacing:.02em}
+/* --- collapsible palette sections (Option 2) --- */
+.pal-toggle{cursor:pointer;width:100%;text-align:left;background:none;border:0;
+  display:flex;align-items:center;gap:7px;user-select:none;-webkit-user-select:none}
+.pal-toggle:hover{color:var(--dim)}
+.pal-toggle .caret{display:inline-block;width:10px;font-size:9px;transition:transform .15s ease}
+.pal-sec.fold .pal-toggle .caret{transform:rotate(-90deg)}
+.pal-sec.fold .pal-item{display:none}
 #stage{flex:1;position:relative;min-width:0;overflow:hidden}
 #cv{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none}
+/* --- wire delete button (shown on the selected wire) --- */
+#wireDel{position:absolute;width:34px;height:34px;border-radius:50%;background:#241716;border:1px solid #5c3532;
+  color:#ff8d86;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:25;
+  box-shadow:0 4px 14px rgba(0,0,0,.45);transform:translate(-50%,-50%);padding:0}
+#wireDel:hover{background:#2c1a18}
+#wireDel .ic{width:14px;height:14px}
 
 #status{display:flex;align-items:center;gap:12px;height:32px;padding:0 12px;background:var(--panel);
   border-top:1px solid var(--line);font:500 11.5px "IBM Plex Mono",monospace;color:var(--dim)}
@@ -198,7 +214,7 @@ table.tt{border-collapse:collapse;font:12.5px "IBM Plex Mono",monospace;width:10
     <canvas id="cv" draggable="false"></canvas>
     <div id="inspector" hidden>
       <div class="insp-head"><span id="inspType"></span><button class="xbtn" id="inspClose" title="Close"></button></div>
-      <label class="fld">Label<input id="inpLabel" maxlength="12" spellcheck="false"></label>
+      <label class="fld" id="lblRow">Label<input id="inpLabel" maxlength="12" spellcheck="false"></label>
       <div id="seqRow" hidden>
         <label class="fld">State · Q</label>
         <div class="seqctl">
@@ -222,6 +238,8 @@ table.tt{border-collapse:collapse;font:12.5px "IBM Plex Mono",monospace;width:10
       <span>The LEDs divide the clock by <em>2 · 4 · 8</em> &nbsp;·&nbsp; flip <em>EN</em> to freeze the count &nbsp;·&nbsp; drag new parts in from the palette</span>
       <button class="xbtn" id="hintClose" title="Dismiss"></button>
     </div>
+    <!-- --- wire delete: floating ✕ that sits on the selected wire --- -->
+    <button id="wireDel" title="Delete wire" hidden></button>
   </div>
 </div>
 
@@ -247,6 +265,9 @@ table.tt{border-collapse:collapse;font:12.5px "IBM Plex Mono",monospace;width:10
    Single file: data model, event-driven simulation engine (unit
    delay + edge detection), canvas renderer, drag-and-drop editor,
    persistence, boot self-test, visible error reporting.
+   Includes 3- and 4-input variants of AND / OR / NAND / NOR,
+   touch/iPad-friendly palette (scrollable + collapsible sections),
+   and per-wire deletion (tap ✕ / double-tap / Del key).
    ============================================================= */
 
 function fatal(msg){ if(typeof window.gatelabFatal==='function') window.gatelabFatal(msg); }
@@ -290,6 +311,16 @@ const CAT = {
   NOR: {kind:'gate',ins:2, outs:1, prefix:'G',  name:'NOR'},
   XOR: {kind:'gate',ins:2, outs:1, prefix:'G',  name:'XOR'},
   XNOR:{kind:'gate',ins:2, outs:1, prefix:'G',  name:'XNOR'},
+  /* --- 3/4-input gates (added) --- */
+  AND3:{kind:'gate',ins:3, outs:1, prefix:'G',  name:'AND ×3'},
+  AND4:{kind:'gate',ins:4, outs:1, prefix:'G',  name:'AND ×4'},
+  OR3: {kind:'gate',ins:3, outs:1, prefix:'G',  name:'OR ×3'},
+  OR4: {kind:'gate',ins:4, outs:1, prefix:'G',  name:'OR ×4'},
+  NAND3:{kind:'gate',ins:3, outs:1, prefix:'G', name:'NAND ×3'},
+  NAND4:{kind:'gate',ins:4, outs:1, prefix:'G', name:'NAND ×4'},
+  NOR3:{kind:'gate',ins:3, outs:1, prefix:'G',  name:'NOR ×3'},
+  NOR4:{kind:'gate',ins:4, outs:1, prefix:'G',  name:'NOR ×4'},
+  /* --- end added gates --- */
   SRL: {kind:'seq', ins:2, outs:2, prefix:'SR', name:'SR latch'},
   DFF: {kind:'seq', ins:4, outs:2, prefix:'FF', name:'D flip-flop'},
   JKFF:{kind:'seq', ins:4, outs:2, prefix:'FF', name:'JK flip-flop'},
@@ -310,7 +341,15 @@ function localTerms(c){
   if(t==='SRL') return {ins:[[-34,-10],[-34,10]], outs:[[34,-10],[34,10]]};
   if(isFF(t)) return {ins:[[-40,-18],[-40,-6],[-40,6],[-40,18]], outs:[[40,-12],[40,12]]};
   const d=CAT[t];
-  return {ins: d.ins===2?[[-46,-11],[-46,11]]:[[-46,0]], outs:[[46,0]]};
+  /* --- pin positions scale with input count (added 3/4-input rows) --- */
+  let ins;
+  switch(d.ins){
+    case 2:  ins=[[-46,-11],[-46,11]];                  break;
+    case 3:  ins=[[-46,-16],[-46,0],[-46,16]];          break;
+    case 4:  ins=[[-46,-21],[-46,-7],[-46,7],[-46,21]]; break;
+    default: ins=[[-46,0]];
+  }
+  return {ins, outs:[[46,0]]};
 }
 function termWorld(c, side, idx){
   const t=localTerms(c);
@@ -330,6 +369,10 @@ function bodyBox(c){
   if(isLED(t)) return [24,24];
   if(t==='SRL') return [30,20];
   if(isFF(t)) return [36,28];
+  /* --- hit box grows slightly for 3/4-input gates (added) --- */
+  const d=CAT[t];
+  if(d.kind==='gate'&&d.ins===3) return [44,25];
+  if(d.kind==='gate'&&d.ins===4) return [44,26];
   return [44,24];
 }
 function compHit(c, wx, wy){
@@ -358,6 +401,8 @@ const pointers = new Map();
 let simUnstable = false, showLabels = true, flowPhase = 0;
 let inspFor = null;
 let idC = 1, idW = 1;
+let lastWire = null;              /* --- wire delete: for double-tap detection --- */
+let lastPointerType = 'mouse';    /* --- touch/iPad: fatter wire hit area for fingers --- */
 const uid = ()=>'c'+(idC++);
 const wid = ()=>'w'+(idW++);
 
@@ -406,6 +451,16 @@ function evalComp(c, now){
     case 'NOR':  return [(i[0]||i[1])?0:1];
     case 'XOR':  return [i[0]^i[1]];
     case 'XNOR': return [1-(i[0]^i[1])];
+    /* --- 3/4-input gate logic (added) --- */
+    case 'AND3': return [(i[0]&&i[1]&&i[2])?1:0];
+    case 'AND4': return [(i[0]&&i[1]&&i[2]&&i[3])?1:0];
+    case 'OR3':  return [(i[0]||i[1]||i[2])?1:0];
+    case 'OR4':  return [(i[0]||i[1]||i[2]||i[3])?1:0];
+    case 'NAND3':return [(i[0]&&i[1]&&i[2])?0:1];
+    case 'NAND4':return [(i[0]&&i[1]&&i[2]&&i[3])?0:1];
+    case 'NOR3': return [(i[0]||i[1]||i[2])?0:1];
+    case 'NOR4': return [(i[0]||i[1]||i[2]||i[3])?0:1];
+    /* --- end added --- */
     case 'SRL':
       if(i[0]||i[1]) c.q=(i[0]&&!i[1])?1:0;
       return [c.q, 1-c.q];
@@ -509,7 +564,7 @@ function sanitize(data){
     const key=t.c+':'+t.i;
     if(seenIn.has(key)){ dropped++; continue; }
     seenIn.add(key);
-    let id = (typeof raw.id==='string' && !usedW.has(raw.id)) ? raw.id : wid();
+    const id = (typeof raw.id==='string' && raw.id.length<=12 && !usedW.has(raw.id)) ? raw.id : wid();
     usedW.add(id);
     nw.push({id, from:{c:f.c,t:'out',i:f.i|0}, to:{c:t.c,t:'in',i:t.i|0}});
   }
@@ -537,6 +592,7 @@ function refreshHistBtns(){ $('#btnUndo').disabled=!hist.u.length; $('#btnRedo')
 
 /* ---------------- persistence ---------------- */
 const KEY='gatelab.circuit.v4';
+const FOLDKEY='gatelab.pal.fold';   /* --- collapsible sections: remembered folds --- */
 let saveTimer=null;
 function setSave(st){ const el=$('#saveState'); el.className='save'+(st==='busy'?' busy':st==='err'?' err':''); el.textContent=st==='busy'?'saving':st==='err'?'not saved':'saved'; }
 function markDirty(){ setSave('busy'); clearTimeout(saveTimer); saveTimer=setTimeout(saveNow,700); }
@@ -690,11 +746,15 @@ function drawBody(g,c,now){
   else if(k==='seq') drawSeq(g,c);
   else drawLED(g,c);
 }
+/* --- gate renderer: body height scales with input count, shape keyed on base name (replaced for 3/4-input support) --- */
 function drawGate(g,c){
   const t=c.type, terms=localTerms(c);
-  const neg = t==='NAND'||t==='NOR'||t==='XNOR'||t==='NOT';
-  const inEdge = (t==='XOR'||t==='XNOR')? -34 : (CAT[t].ins===1? -26 : -30);
-  const outEdge = {AND:28,OR:30,XOR:30,BUF:28,NAND:38,NOR:40,XNOR:40,NOT:38}[t];
+  const base=t.replace(/(3|4)$/,'');            // AND4 -> AND, NOR3 -> NOR
+  const neg = base==='NAND'||base==='NOR'||base==='XNOR'||base==='NOT';
+  const n=CAT[t].ins;
+  const H = n>=4 ? 26 : n===3 ? 25 : 22;        // body half-height grows with pin count
+  const inEdge = (base==='XOR'||base==='XNOR') ? -34 : (n===1 ? -26 : -30);
+  const outEdge = {AND:6+H, BUF:28, NAND:6+H+10, OR:30, NOR:40, XOR:30, XNOR:40, NOT:38}[base];
   g.lineWidth=2;
   terms.ins.forEach((p,i)=>{
     g.strokeStyle=c.in[i]?COL.hot:COL.stub;
@@ -706,21 +766,21 @@ function drawGate(g,c){
   g.fillStyle=hov?'#22221e':COL.body;
   g.strokeStyle=sel.comps.has(c.id)?COL.hot:COL.stroke;
   g.beginPath();
-  switch(t){
+  switch(base){
     case 'AND': case 'NAND':
-      g.moveTo(-30,-22); g.lineTo(6,-22); g.arc(6,0,22,-Math.PI/2,Math.PI/2); g.lineTo(-30,22); g.closePath(); break;
+      g.moveTo(-30,-H); g.lineTo(6,-H); g.arc(6,0,H,-Math.PI/2,Math.PI/2); g.lineTo(-30,H); g.closePath(); break;
     case 'OR': case 'NOR': case 'XOR': case 'XNOR':
-      g.moveTo(-30,-22); g.quadraticCurveTo(4,-22,30,0);
-      g.quadraticCurveTo(4,22,-30,22); g.quadraticCurveTo(-16,0,-30,-22); g.closePath(); break;
+      g.moveTo(-30,-H); g.quadraticCurveTo(4,-H,30,0);
+      g.quadraticCurveTo(4,H,-30,H); g.quadraticCurveTo(-16,0,-30,-H); g.closePath(); break;
     default:
       g.moveTo(-26,-20); g.lineTo(28,0); g.lineTo(-26,20); g.closePath();
   }
   g.fill(); g.stroke();
-  if(t==='XOR'||t==='XNOR'){
-    g.beginPath(); g.moveTo(-38,-22); g.quadraticCurveTo(-24,0,-38,22); g.stroke();
+  if(base==='XOR'||base==='XNOR'){
+    g.beginPath(); g.moveTo(-38,-H); g.quadraticCurveTo(-24,0,-38,H); g.stroke();
   }
   if(neg){
-    g.beginPath(); g.arc(t==='NOT'||t==='NAND'?33:35,0,5,0,6.2832);
+    g.beginPath(); g.arc(base==='NOT'?33:(base==='NAND'?6+H+5:35),0,5,0,6.2832);
     g.fillStyle=COL.body; g.fill(); g.stroke();
   }
   terms.ins.forEach((p,i)=>termDot(g,p[0],p[1],c.in[i],hotTerm(c,'in',i)));
@@ -834,7 +894,9 @@ function computeHover(w){
   }
   if(best) return best;
   for(const c of comps) if(compHit(c,w[0],w[1])) return {type:'comp',id:c.id};
-  const wt=7/view.z+2; let bw=null, bd=wt;
+  /* --- touch/iPad: wider wire pick radius for fingers --- */
+  const wt=(lastPointerType==='touch'?13:7)/view.z+2;
+  let bw=null, bd=wt;
   for(const wi of wires){
     const s=byId.get(wi.from.c), t=byId.get(wi.to.c);
     if(!s||!t) continue;
@@ -869,6 +931,7 @@ canvas.addEventListener('wheel', e=>{
 document.addEventListener('dragstart', e=>e.preventDefault());   // never let the browser's native drag steal pointer drags
 
 function onDown(e){
+  lastPointerType=e.pointerType||'mouse';
   if(palDrag) return;                       // a palette drag is in flight — ignore the canvas
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
@@ -917,6 +980,14 @@ function onDown(e){
     return;
   }
   if(hover && hover.type==='wire'){
+    /* --- wire delete: double-tap a wire to remove it instantly --- */
+    const now=performance.now();
+    if(lastWire && lastWire.id===hover.id && (now-lastWire.t)<400){
+      sel.wires.clear(); sel.wires.add(hover.id);
+      deleteSelectedWires();
+      lastWire=null; return;
+    }
+    lastWire={id:hover.id,t:now};
     if(!e.shiftKey) selClear();
     sel.wires.add(hover.id);
     updateInspector();
@@ -928,6 +999,7 @@ function onDown(e){
 }
 
 function onMove(e){
+  lastPointerType=e.pointerType||lastPointerType;
   if(pointers.has(e.pointerId)) pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
   if(drag && drag.mode==='pinch'){
     if(pointers.size>=2){
@@ -983,7 +1055,7 @@ function onUp(e){
 }
 
 function placeAt(w, keep){
-  const c=mkComp(placing.type,w[0],w[1]);
+  const c=mkComp(placing.type,w[0],w[1],{rot:placing.rot});
   pushHist();
   comps.push(c); reindex(); markDirty(); updateCounts();
   selClear(); sel.comps.add(c.id); updateInspector();
@@ -1044,6 +1116,32 @@ function deleteSelection(){
   if(sel.wires.size) wires=wires.filter(w=>!sel.wires.has(w.id));
   reindex(); selClear(); markDirty(); updateCounts();
 }
+/* --- wire delete: remove only the selected wires, components untouched --- */
+function deleteSelectedWires(){
+  if(!sel.wires.size) return;
+  const n=sel.wires.size;
+  pushHist();
+  wires=wires.filter(w=>!sel.wires.has(w.id));
+  sel.wires.clear(); lastWire=null;
+  updateInspector(); markDirty(); updateCounts();
+  toast(n>1 ? (n+' wires removed') : 'Wire removed');
+}
+/* --- wire delete: keep the floating ✕ on the selected wire (screen coords, tracks pan/zoom) --- */
+function updateWireDel(){
+  const b=$('#wireDel');
+  if(!sel.wires.size || sel.comps.size || pendingWire || placing){ b.hidden=true; return; }
+  const w=wires.find(x=>sel.wires.has(x.id));
+  if(!w){ b.hidden=true; return; }
+  const s=byId.get(w.from.c), t=byId.get(w.to.c);
+  if(!s||!t){ b.hidden=true; return; }
+  const p1=termWorld(s,'out',w.from.i), p2=termWorld(t,'in',w.to.i);
+  const [c1,c2]=bezierPts(p1,p2);
+  const mx=(p1[0]+3*c1[0]+3*c2[0]+p2[0])/8;    // bezier midpoint at t=0.5
+  const my=(p1[1]+3*c1[1]+3*c2[1]+p2[1])/8;
+  b.hidden=false;
+  b.style.left=(view.x+mx*view.z)+'px';
+  b.style.top =(view.y+my*view.z-34)+'px';
+}
 function rotateSel(){
   if(placing){ placing.rot=((placing.rot+1)&3); return; }
   if(!sel.comps.size) return;
@@ -1077,6 +1175,7 @@ function duplicateSel(){
 /* ---------------- keyboard ---------------- */
 window.addEventListener('keydown', e=>{
   if(e.target && e.target.closest && e.target.closest('input,select,textarea')) return;
+  if(!$('#modal').hidden){ if(e.key==='Escape') closeModal(); return; }
   const mod=e.ctrlKey||e.metaKey;
   if(e.code==='Space'){ spaceHeld=true; updateCursor(); e.preventDefault(); return; }
   const k=e.key.toLowerCase();
@@ -1108,542 +1207,520 @@ document.addEventListener('pointerdown', e=>{ if(!e.target.closest('.dd')) $('#e
 
 /* ---------------- palette: click-to-place AND drag-and-drop ---------------- */
 const PALETTE=[
-  {h:'Inputs'},{t:'SW'},{t:'CLK'},
-  {h:'Gates'},{t:'NOT'},{t:'BUF'},{t:'AND'},{t:'OR'},{t:'NAND'},{t:'NOR'},{t:'XOR'},{t:'XNOR'},
-  {h:'Sequential'},{t:'SRL'},{t:'DFF'},{t:'JKFF'},{t:'TFF'},
-  {h:'Outputs'},{t:'LEDR'},{t:'LEDG'},{t:'LEDY'},
+  {h:'Inputs'},
+  {t:'SW'},{t:'CLK'},
+  {h:'Gates · 2-in'},
+  {t:'NOT'},{t:'BUF'},{t:'AND'},{t:'OR'},{t:'NAND'},{t:'NOR'},{t:'XOR'},{t:'XNOR'},
+  /* --- 3/4-input gate palette group (added) --- */
+  {h:'Gates · 3/4-in'},
+  {t:'AND3'},{t:'AND4'},{t:'OR3'},{t:'OR4'},{t:'NAND3'},{t:'NAND4'},{t:'NOR3'},{t:'NOR4'},
+  {h:'Sequential'},
+  {t:'SRL'},{t:'DFF'},{t:'JKFF'},{t:'TFF'},
+  {h:'Outputs'},
+  {t:'LEDR'},{t:'LEDG'},{t:'LEDY'},
 ];
-const palBtns={};
-function buildPalette(){
-  const pal=$('#pal');
-  for(const it of PALETTE){
-    if(it.h){ const d=document.createElement('div'); d.className='pal-h'; d.textContent=it.h; pal.appendChild(d); continue; }
-    const b=document.createElement('button');
-    b.className='pal-item';
-    b.setAttribute('draggable','false');
-    b.title='Drag onto the canvas to drop it anywhere — or click, then click the canvas';
-    const cv=document.createElement('canvas');
-    cv.setAttribute('draggable','false');
-    drawPalIcon(cv,it.t);
-    const sp=document.createElement('span');
-    sp.textContent=CAT[it.t].name+(CAT[it.t].key?' · '+CAT[it.t].key:'');
-    b.append(cv,sp);
 
-    b.addEventListener('pointerdown', e=>{
-      if(e.button!==0 || palDrag) return;
-      e.preventDefault();                          // blocks native drag / selection / focus steals
-      try{ b.setPointerCapture(e.pointerId); }catch(_){}
-      palDrag={type:it.t, pid:e.pointerId, sx:e.clientX, sy:e.clientY, moved:false, over:false,
-               wx:NaN, wy:NaN, wasArmed:!!(placing && placing.type===it.t)};
-      placing=null; syncPalette(); updateStatusUI();
-    });
-    pal.appendChild(b);
-    palBtns[it.t]=b;
-  }
-  /* window-level tracking: reliable whether or not pointer capture succeeded */
-  window.addEventListener('pointermove', e=>{
-    if(!palDrag || palDrag.pid!==e.pointerId) return;
-    if(!palDrag.moved && Math.hypot(e.clientX-palDrag.sx, e.clientY-palDrag.sy)>5) palDrag.moved=true;
-    const r=canvas.getBoundingClientRect();
-    const over = e.clientX>=r.left && e.clientX<=r.right && e.clientY>=r.top && e.clientY<=r.bottom;
-    if(over!==palDrag.over){ palDrag.over=over; updateStatusUI(); }
-    if(over){ const w=clientToWorld(e.clientX,e.clientY); palDrag.wx=w[0]; palDrag.wy=w[1]; }
-  });
-  window.addEventListener('pointerup', e=>{
-    if(!palDrag || e.pointerId!==palDrag.pid) return;
-    const d=palDrag; palDrag=null;
-    if(d.over && d.moved && isFinite(d.wx)){
-      const c=mkComp(d.type, d.wx, d.wy);
-      pushHist();
-      comps.push(c); reindex(); markDirty(); updateCounts();
-      selClear(); sel.comps.add(c.id); updateInspector();
-    }else if(!d.moved && !d.wasArmed){
-      placing={type:d.type, rot:0}; syncPalette();
-    }
-    updateStatusUI(); updateCursor();
-  });
-  window.addEventListener('pointercancel', e=>{
-    if(palDrag && e.pointerId===palDrag.pid){ palDrag=null; updateStatusUI(); }
-  });
-}
-function drawPalIcon(cv,type){
-  const d=Math.min(2,window.devicePixelRatio||1);
-  cv.width=92*d; cv.height=52*d; cv.style.width='92px'; cv.style.height='52px';
+function makeThumb(type){
+  const d=CAT[type], cv=document.createElement('canvas');
+  const W=104, H=64, s=.56, dp=Math.min(2, window.devicePixelRatio||1);
+  cv.width=Math.round(W*s*dp); cv.height=Math.round(H*s*dp);
+  cv.style.width=(W*s)+'px'; cv.style.height=(H*s)+'px';
   const g=cv.getContext('2d');
-  g.setTransform(d,0,0,d,0,0); g.translate(46,26); g.scale(.72,.72); g.lineCap='round';
-  const fake={id:'_p',type,x:0,y:0,rot:0,label:'',state:0,period:1000,q:0,pc:0,fresh:true,
-    in:new Array(CAT[type].ins).fill(isLED(type)?1:0), out:new Array(CAT[type].outs).fill(0)};
-  drawBody(g,fake,0);
+  g.scale(s*dp, s*dp); g.translate(W/2, H/2);
+  const c={id:'_thumb', type, x:0, y:0, rot:0, label:'', state:0, period:1000, q:0, pc:0, fresh:true,
+           in:new Array(d.ins).fill(0), out:new Array(d.outs).fill(0)};
+  drawBody(g, c, 0);
+  return cv;
+}
+/* --- collapsible sections: headers are buttons, items live in a .pal-sec wrapper --- */
+function buildPalette(){
+  const pal=$('#pal'); pal.innerHTML='';
+  let sec=null;
+  for(const it of PALETTE){
+    if(it.h){
+      sec=document.createElement('div');
+      sec.className='pal-sec'; sec.dataset.sec=it.h;
+      const h=document.createElement('button');
+      h.type='button'; h.className='pal-h pal-toggle';
+      h.title='Tap to fold / unfold';
+      h.innerHTML='<span class="caret">▾</span>'+esc(it.h);
+      h.addEventListener('click', ()=>{ sec.classList.toggle('fold'); saveFold(); });
+      sec.appendChild(h); pal.appendChild(sec);
+      continue;
+    }
+    const b=document.createElement('button');
+    b.className='pal-item'; b.dataset.type=it.t; b.title=CAT[it.t].name;
+    b.appendChild(makeThumb(it.t));
+    const sp=document.createElement('span');
+    if(isLED(it.t)) sp.innerHTML='<i class="dot" style="background:'+CAT[it.t].color+'"></i>';
+    sp.appendChild(document.createTextNode(CAT[it.t].name));
+    b.appendChild(sp);
+    sec.appendChild(b);
+  }
+  applyFold();
+  syncPalette();
+}
+function foldKeySet(){
+  try{ const a=JSON.parse(localStorage.getItem(FOLDKEY)||'[]'); return new Set(Array.isArray(a)?a:[]); }
+  catch(e){ return new Set(); }
+}
+function saveFold(){
+  try{ localStorage.setItem(FOLDKEY, JSON.stringify([...document.querySelectorAll('#pal .pal-sec.fold')].map(s=>s.dataset.sec))); }
+  catch(e){}
+}
+function applyFold(){
+  const f=foldKeySet();
+  document.querySelectorAll('#pal .pal-sec').forEach(s=>{ s.classList.toggle('fold', f.has(s.dataset.sec)); });
 }
 function syncPalette(){
-  for(const t in palBtns) palBtns[t].classList.toggle('on', !!(placing&&placing.type===t));
+  document.querySelectorAll('#pal .pal-item').forEach(b=>{
+    b.classList.toggle('on', !!placing && b.dataset.type===placing.type);
+  });
 }
-
-/* ---------------- inspector ---------------- */
-const inpLabel=$('#inpLabel');
-function updateInspector(){
-  const one=(sel.comps.size===1&&!sel.wires.size)? byId.get([...sel.comps][0]) : null;
-  if(one){
-    $('#inspector').hidden=false;
-    $('#inspType').textContent=CAT[one.type].name+(CAT[one.type].key?' · '+CAT[one.type].key:'');
-    if(document.activeElement!==inpLabel) inpLabel.value=one.label;
-    $('#clkRow').hidden = one.type!=='CLK';
-    if(one.type==='CLK') $('#inpSpeed').value=String(one.period);
-    $('#seqRow').hidden = !isSeq(one.type);
-    inspFor=one.id;
-  }else{
-    $('#inspector').hidden=true; inspFor=null;
+ $('#pal').addEventListener('pointerdown', e=>{
+  const b=e.target.closest('.pal-item'); if(!b) return;
+  // no preventDefault here: with touch-action:pan-y the browser may take over
+  // for a vertical scroll and fire pointercancel — which we handle cleanly.
+  palDrag={type:b.dataset.type, moved:false, sx:e.clientX, sy:e.clientY, wx:0, wy:0, over:false, vert:false};
+  window.addEventListener('pointermove', onPalMove);
+  window.addEventListener('pointerup', onPalUp);
+  window.addEventListener('pointercancel', onPalUp);
+});
+function onPalMove(e){
+  if(!palDrag) return;
+  if(!palDrag.moved){
+    const dx=e.clientX-palDrag.sx, dy=e.clientY-palDrag.sy;
+    if(Math.hypot(dx,dy)<=6) return;
+    /* --- touch/iPad: vertical gesture = scroll, hand it back to Safari --- */
+    if(e.pointerType==='touch' && Math.abs(dx)<Math.abs(dy)*1.15){ palDrag.vert=true; return; }
+    palDrag.moved=true;
   }
+  if(palDrag.vert) return;
+  const r=$('#stage').getBoundingClientRect();
+  palDrag.over = e.clientX>=r.left && e.clientX<=r.right && e.clientY>=r.top && e.clientY<=r.bottom;
+  palDrag.wx=(e.clientX-r.left-view.x)/view.z;
+  palDrag.wy=(e.clientY-r.top-view.y)/view.z;
 }
-inpLabel.addEventListener('input',()=>{
-  const c=byId.get(inspFor);
-  if(c){ c.label=inpLabel.value.slice(0,12); markDirty(); }
-});
- $('#inpSpeed').addEventListener('change',()=>{
-  const c=byId.get(inspFor);
-  if(c&&c.type==='CLK'){ c.period=+$('#inpSpeed').value||1000; markDirty(); }
-});
- $('#inspRot').addEventListener('click',rotateSel);
- $('#inspDel').addEventListener('click',deleteSelection);
- $('#inspClose').addEventListener('click',()=>{ selClear(); });
- $('#inspSet').addEventListener('click',()=>{
-  const c=byId.get(inspFor);
-  if(c&&isSeq(c.type)){ c.q=1; markDirty(); }
-});
- $('#inspClr').addEventListener('click',()=>{
-  const c=byId.get(inspFor);
-  if(c&&isSeq(c.type)){ c.q=0; markDirty(); }
-});
+function onPalUp(e){
+  window.removeEventListener('pointermove', onPalMove);
+  window.removeEventListener('pointerup', onPalUp);
+  window.removeEventListener('pointercancel', onPalUp);
+  const pd=palDrag; palDrag=null;
+  if(!pd) return;
+  /* scroll took over, or the gesture was cancelled — do nothing */
+  if(pd.vert || !e || e.type==='pointercancel'){ syncPalette(); return; }
+  if(pd.moved && pd.over){
+    pushHist();
+    const c=mkComp(pd.type, pd.wx, pd.wy);
+    comps.push(c); reindex(); markDirty(); updateCounts();
+    selClear(); sel.comps.add(c.id); updateInspector();
+  }else if(!pd.moved){
+    placing=(placing && placing.type===pd.type)? null : {type:pd.type, rot:0};
+    updateStatusUI();
+  }
+  syncPalette();
+}
 
-/* ---------------- status / view UI ---------------- */
+/* ---------------- status bar / toasts ---------------- */
+function updateCounts(){
+  $('#statCounts').textContent=comps.length+' parts · '+wires.length+' wires';
+}
+function updateViewUI(){
+  $('#statZoom').textContent=Math.round(view.z*100)+'%';
+}
 function updateStatusUI(){
   const el=$('#statMsg');
-  if(simUnstable){ el.textContent='UNSTABLE · combinational feedback loop is oscillating'; el.classList.add('warn'); return; }
-  el.classList.remove('warn');
-  if(palDrag){
-    el.textContent = palDrag.over
-      ? 'Release to drop the '+CAT[palDrag.type].name+' here'
-      : 'Drag the '+CAT[palDrag.type].name+' over the canvas, then release';
-    return;
-  }
-  el.textContent = placing
-    ? 'Placing '+CAT[placing.type].name+' — click to drop · Shift-click for several · R rotates · Esc cancels'
-    : pendingWire
-    ? 'Wiring — click a matching pin to connect · Esc cancels'
-    : 'Drag parts in from the palette · drag pin → pin to wire · click switches to flip · right-drag pans';
+  el.classList.toggle('warn', simUnstable);
+  el.textContent = simUnstable ? 'oscillating — check feedback loops'
+    : placing ? 'Placing '+CAT[placing.type].name+' — click the canvas · Shift keeps placing · Esc stops'
+    : pendingWire ? 'Wiring — click an input pin to finish · Esc cancels'
+    : sel.wires.size ? 'Wire selected — tap the ✕ on it to remove (double-tap works too)'
+    : 'Ready';
 }
-function updateViewUI(){ $('#statZoom').textContent=Math.round(view.z*100)+'%'; }
-function updateCounts(){ $('#statCounts').textContent=comps.length+' parts · '+wires.length+' wires'; }
-
-/* ---------------- toasts ---------------- */
-function toast(msg,kind){
-  const box=$('#toasts');
-  while(box.children.length>=4) box.firstChild.remove();
+function toast(msg, kind){
   const t=document.createElement('div');
   t.className='toast'+(kind==='err'?' err':kind==='ok'?' ok':'');
   t.textContent=msg;
-  box.appendChild(t);
-  setTimeout(()=>{ t.classList.add('out'); setTimeout(()=>t.remove(),320); },2600);
+  $('#toasts').appendChild(t);
+  setTimeout(()=>{ t.classList.add('out'); setTimeout(()=>t.remove(),350); }, 2600);
 }
 
-/* ---------------- modals ---------------- */
-function openModal(html,wide){
-  const card=$('#modalCard');
-  card.className=wide?'wide':'';
-  card.innerHTML=html;
+/* ---------------- inspector ---------------- */
+function updateInspector(){
+  const box=$('#inspector');
+  const ids=[...sel.comps];
+  const c=ids.length===1? byId.get(ids[0]) : null;
+  if(!c){
+    if(sel.wires.size>=1){
+      /* --- wire delete: minimal inspector for wires (no label, no rotate) --- */
+      inspFor=null; box.hidden=false;
+      $('#inspType').textContent= sel.wires.size===1 ? 'Wire' : (sel.wires.size+' wires');
+      $('#lblRow').hidden=true; $('#seqRow').hidden=true; $('#clkRow').hidden=true;
+      $('#inspRot').hidden=true;
+    }else{
+      inspFor=null; box.hidden=true;
+    }
+    updateWireDel(); updateStatusUI();
+    return;
+  }
+  inspFor=c.id; box.hidden=false;
+  $('#inspType').textContent=CAT[c.type].name;
+  $('#lblRow').hidden=false;
+  $('#inspRot').hidden=false;
+  $('#inpLabel').value=c.label;
+  $('#seqRow').hidden=!isSeq(c.type);
+  $('#clkRow').hidden=c.type!=='CLK';
+  if(isSeq(c.type)) $('#inspQ').textContent=c.q?1:0;
+  if(c.type==='CLK') $('#inpSpeed').value=String(c.period);
+  updateWireDel(); updateStatusUI();
+}
+
+/* ---------------- modal ---------------- */
+function openModal(html, wide){
+  $('#modalCard').className=wide?'wide':'';
+  $('#modalCard').innerHTML=html;
   $('#modal').hidden=false;
 }
-function closeModal(){ $('#modal').hidden=true; $('#modalCard').innerHTML=''; }
- $('#modal').addEventListener('pointerdown',e=>{ if(e.target.id==='modal') closeModal(); });
-
-function confirmBox(title,body,okLabel,cb){
-  openModal(`<div class="m-title">${title}</div><p class="m-body">${body}</p>
-    <div class="m-actions"><button class="btn" id="mCancel">Cancel</button>
-    <button class="btn danger" id="mOk">${okLabel}</button></div>`);
-  $('#mCancel').onclick=closeModal;
-  $('#mOk').onclick=()=>{ closeModal(); cb(); };
+function closeModal(){
+  $('#modal').hidden=true;
+  $('#modalCard').innerHTML='';
 }
-function openHelp(){
-  openModal(`<div class="m-title">GATELAB — quick reference</div>
-   <div class="m-cols">
-    <div>
-      <h4>Building</h4>
-      <ul>
-        <li><b>Drag any part from the palette onto the canvas</b> — it lands exactly where you release. Or click a part, then click the canvas (Shift-click places several).</li>
-        <li>Parts are free-floating: drag them anywhere, any time, even on top of each other.</li>
-        <li>Drag from pin to pin to wire (or click pin, then pin). Wires run output → input; one wire per input — a new one replaces the old.</li>
-        <li>Click a switch to flip it. LEDs glow when their input is HIGH.</li>
-      </ul>
-      <h4>Sequential parts</h4>
-      <ul>
-        <li>D, JK and T flip-flops are <b>rising-edge triggered</b>: they sample their data pin the moment CLK goes 0 → 1. All flip-flops clocked by the same signal sample simultaneously, exactly like real silicon.</li>
-        <li><b>PRE / CLR</b> are asynchronous, active-HIGH overrides (unconnected = inactive). PRE forces Q=1, CLR forces Q=0; PRE wins if both are high.</li>
-        <li><b>Q̄</b> is the inverted output. You can also force state from the inspector (Set / Rst).</li>
-        <li>The SR latch is level-sensitive: S sets, R resets, both low holds, both high is invalid (Q=0).</li>
-        <li>Anything can drive CLK — a Clock part, a switch, or a gate output (ripple counters work).</li>
-      </ul>
-    </div>
-    <div>
-      <h4>Semantics</h4>
-      <ul>
-        <li>Mix as many gates and sequential parts as you like — there is no limit.</li>
-        <li>Unconnected inputs read LOW (0).</li>
-        <li>The status bar flags <b>UNSTABLE</b> when combinational feedback oscillates (e.g. a NOT feeding itself).</li>
-        <li>Undo covers editing, not switch flips or state changes.</li>
-        <li>Autosaves to this browser; Export / Import moves circuits as .json.</li>
-      </ul>
-      <h4>Keyboard</h4>
-      <table class="keys">
-        <tr><td>Space / right-drag</td><td>pan</td></tr>
-        <tr><td>wheel / pinch</td><td>zoom</td></tr>
-        <tr><td>F</td><td>zoom to fit</td></tr>
-        <tr><td>R</td><td>rotate selection</td></tr>
-        <tr><td>Del</td><td>delete selection</td></tr>
-        <tr><td>Ctrl+Z / +Shift</td><td>undo / redo</td></tr>
-        <tr><td>Ctrl+D</td><td>duplicate</td></tr>
-        <tr><td>Ctrl+A</td><td>select all</td></tr>
-        <tr><td>Ctrl+S</td><td>save now</td></tr>
-        <tr><td>T</td><td>truth table</td></tr>
-      </table>
-    </div>
-   </div>
-   <div class="m-actions"><button class="btn" id="mClose">Close</button></div>`);
-  $('#mClose').onclick=closeModal;
-}
+ $('#modal').addEventListener('click', e=>{ if(e.target.id==='modal') closeModal(); });
 
-/* ---------------- truth table ---------------- */
+/* ---------------- truth tables ---------------- */
 function openTruth(){
-  const sws=comps.filter(c=>c.type==='SW').sort(labelSort);
-  const leds=comps.filter(c=>isLED(c.type)).sort(labelSort);
-  if(!sws.length||!leds.length){ toast('Truth table needs at least one switch and one LED','err'); return; }
-  if(sws.length>8){ toast('Too many switches for a truth table (max 8)','err'); return; }
-  const savedSw=sws.map(s=>s.state);
-  const savedSt=comps.filter(c=>isSeq(c.type)).map(c=>[c,c.q]);
-  const hasClk=comps.some(c=>c.type==='CLK');
-  const hasSeq=savedSt.length>0;
-  simOpts.freezeClocks=true;
-  let anyUnstable=false;
-  const n=sws.length, rows=[];
-  for(let m=0;m<(1<<n);m++){
-    const bits=[];
-    sws.forEach((s,i)=>{ s.state=(m>>(n-1-i))&1; bits.push(s.state); });
-    if(!simulate(performance.now())) anyUnstable=true;
-    rows.push({ins:bits, outs:leds.map(l=>l.in[0])});
+  const ids=[...sel.comps];
+  if(ids.length===1){
+    const c=byId.get(ids[0]);
+    if(c && CAT[c.type].kind==='gate'){ showGateTruth(c.type); return; }
   }
-  sws.forEach((s,i)=>s.state=savedSw[i]);
-  savedSt.forEach(([c,q])=>{ c.q=q; });
-  comps.forEach(c=>{ if(isFF(c.type)) c.fresh=true; });
-  simOpts.freezeClocks=false;
-  simulate(performance.now());
-
-  let html='<div class="m-title">Truth table</div><div class="ttwrap"><table class="tt"><thead><tr><th class="ix">#</th>'
-    +sws.map(s=>`<th>${esc(s.label)}</th>`).join('')+'<th class="sep"></th>'
-    +leds.map(l=>`<th><i class="dot" style="background:${CAT[l.type].color}"></i>${esc(l.label)}</th>`).join('')
-    +'</tr></thead><tbody>';
-  rows.forEach((r,i)=>{
-    html+=`<tr><td class="ix">${i}</td>`
-      +r.ins.map(v=>v?'<td>1</td>':'<td class="z">0</td>').join('')
-      +'<td class="sep"></td>'
-      +r.outs.map((v,j)=>v?`<td style="color:${CAT[leds[j].type].color}">1</td>`:'<td class="z">0</td>').join('')
-      +'</tr>';
-  });
-  html+='</tbody></table></div>';
-  const notes=[];
-  if(hasClk) notes.push('Free-running clock parts were held low during enumeration.');
-  if(hasSeq) notes.push('Sequential parts hold their internal state — Q columns may depend on the order of rows, not just the current row.');
-  if(anyUnstable) notes.push('Some states contain feedback and did not fully settle — values shown are the last iteration.');
-  if(notes.length) html+='<div class="foot-note">'+notes.join('<br>')+'</div>';
-  html+=`<div class="m-actions"><button class="btn" id="mCsv">Copy as CSV</button><button class="btn" id="mClose">Close</button></div>`;
-  openModal(html,true);
-  $('#mClose').onclick=closeModal;
-  $('#mCsv').onclick=()=>{
-    const csv=[sws.map(s=>s.label).join(',')+','+leds.map(l=>l.label).join(',')];
-    rows.forEach(r=>csv.push(r.ins.join(',')+','+r.outs.join(',')));
-    copyCSV(csv.join('\n'));
-  };
+  showCircuitTruth();
 }
-function copyCSV(text){
-  if(navigator.clipboard&&navigator.clipboard.writeText)
-    navigator.clipboard.writeText(text).then(()=>toast('Copied table as CSV','ok'),()=>fallbackCopy(text));
-  else fallbackCopy(text);
+function showGateTruth(type){
+  const d=CAT[type], n=d.ins, L=['A','B','C','D'];
+  let rows='';
+  for(let m=0;m<(1<<n);m++){
+    const bits=[]; for(let k=0;k<n;k++) bits[k]=(m>>(n-1-k))&1;
+    const o=evalComp({type, in:bits, q:0, state:0, period:1000},0)[0]?1:0;
+    rows+='<tr><td class="ix">'+m+'</td>'
+        + bits.map(v=>'<td>'+v+'</td>').join('')
+        + '<td class="sep"></td><td'+(o?'':' class="z"')+'>'+o+'</td></tr>';
+  }
+  openModal(
+    '<div class="m-title">Truth table — '+esc(d.name)+'</div>'
+    +'<div class="m-body">'+n+' input'+(n>1?'s':'')+' · '+(1<<n)+' row'+(n>1?'s':'')
+    +'. Inputs list top-to-bottom pins as '+L.slice(0,n).join(', ')+'; output is Q.</div>'
+    +'<div class="ttwrap"><table class="tt"><thead><tr><th class="ix">#</th>'
+    + L.slice(0,n).map(l=>'<th>'+l+'</th>').join('')
+    + '<th class="sep"></th><th>Q</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+    +'<div class="m-actions"><button class="btn" id="mClose">Close</button></div>');
+  $('#mClose').addEventListener('click', closeModal);
 }
-function fallbackCopy(text){
-  const ta=document.createElement('textarea');
-  ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
-  document.body.appendChild(ta); ta.select();
-  try{ document.execCommand('copy'); toast('Copied table as CSV','ok'); }
-  catch(e){ toast('Copy failed','err'); }
-  ta.remove();
+function showCircuitTruth(){
+  const msg=(t,b)=>openModal('<div class="m-title">'+t+'</div><div class="m-body">'+b+'</div>'
+    +'<div class="m-actions"><button class="btn" id="mClose">Close</button></div>');
+  if(comps.some(c=>c.type==='CLK'||isSeq(c.type)))
+    return msg('Truth table — whole circuit',
+      'This circuit contains a clock or flip-flops, so its outputs depend on time as well as on the switches. Select a single gate instead, or build a purely combinational circuit (switches → gates → LEDs) to table the whole thing.');
+  const sws=comps.filter(c=>c.type==='SW').sort(labelSort);
+  const leds=comps.filter(isLED).sort(labelSort);
+  if(!sws.length || !leds.length)
+    return msg('Truth table — whole circuit','A whole-circuit truth table needs at least one switch (input) and one LED (output).');
+  if(sws.length>8)
+    return msg('Truth table — whole circuit','Too many inputs: '+sws.length+' switches would need '+(1<<sws.length)+' rows (max 8 switches).');
+  const saved=sws.map(c=>c.state);
+  let rows='';
+  for(let m=0;m<(1<<sws.length);m++){
+    sws.forEach((c,k)=>{ c.state=(m>>(sws.length-1-k))&1; });
+    settle(0);
+    rows+='<tr><td class="ix">'+m+'</td>'
+        + sws.map(c=>'<td>'+c.state+'</td>').join('')
+        + '<td class="sep"></td>'
+        + leds.map(c=>c.in[0]?'<td>1</td>':'<td class="z">0</td>').join('')
+        + '</tr>';
+  }
+  sws.forEach((c,k)=>{ c.state=saved[k]; });
+  settle(0);
+  openModal(
+    '<div class="m-title">Truth table — whole circuit</div>'
+    +'<div class="m-body">'+sws.length+' input'+(sws.length>1?'s':'')+' · '+leds.length+' output'+(leds.length>1?'s':'')
+    +' · '+(1<<sws.length)+' rows.</div>'
+    +'<div class="ttwrap"><table class="tt"><thead><tr>'
+    + sws.map(c=>'<th>'+esc(c.label)+'</th>').join('')
+    + '<th class="sep"></th>'
+    + leds.map(c=>'<th><span class="dot" style="background:'+CAT[c.type].color+'"></span>'+esc(c.label)+'</th>').join('')
+    + '</tr></thead><tbody>'+rows+'</tbody></table></div>'
+    +'<div class="m-actions"><button class="btn" id="mClose">Close</button></div>', true);
+  $('#mClose').addEventListener('click', closeModal);
 }
 
 /* ---------------- examples ---------------- */
-function cn(sc,si,tc,ti){ wires.push({id:wid(),from:{c:sc.id,t:'out',i:si},to:{c:tc.id,t:'in',i:ti}}); }
-function buildHalf(){
-  comps=[]; wires=[];
-  const A=mkComp('SW',120,160,{label:'A',state:1});
-  const B=mkComp('SW',120,280,{label:'B'});
-  const X=mkComp('XOR',380,180,{label:'XOR'});
-  const An=mkComp('AND',380,320,{label:'AND'});
-  const S=mkComp('LEDR',640,180,{label:'SUM'});
-  const C=mkComp('LEDG',640,320,{label:'CARRY'});
-  comps.push(A,B,X,An,S,C);
-  cn(A,0,X,0); cn(B,0,X,1); cn(A,0,An,0); cn(B,0,An,1);
-  cn(X,0,S,0); cn(An,0,C,0);
-  return {comps,wires};
+function exDivider(C,W){
+  const clk=C('CLK',0,0,{label:'CLK'});
+  const en =C('SW',0,90,{label:'EN',state:1});
+  const g  =C('AND',160,45);
+  W(clk,0,g,0); W(en,0,g,1);
+  let drive=null;
+  ['÷2','÷4','÷8'].forEach((lab,k)=>{
+    const y=45+k*110;
+    const ff=C('DFF',330,y);
+    const led=C('LEDG',500,y,{label:lab});
+    if(drive) W(drive,0,ff,1); else W(g,0,ff,1);
+    W(ff,1,ff,0);            // Qbar -> D : toggle on every rising edge
+    W(ff,0,led,0);
+    drive=ff;
+  });
 }
-function buildFull(){
-  comps=[]; wires=[];
-  const A=mkComp('SW',120,140,{label:'A',state:1});
-  const B=mkComp('SW',120,260,{label:'B',state:1});
-  const Ci=mkComp('SW',120,460,{label:'Cin'});
-  const X1=mkComp('XOR',400,160,{label:'XOR1'});
-  const X2=mkComp('XOR',660,160,{label:'XOR2'});
-  const A1=mkComp('AND',660,320,{label:'AND1'});
-  const A2=mkComp('AND',400,320,{label:'AND2'});
-  const O=mkComp('OR',860,300,{label:'OR'});
-  const S=mkComp('LEDR',980,160,{label:'SUM'});
-  const Co=mkComp('LEDG',980,300,{label:'Cout'});
-  comps.push(A,B,Ci,X1,X2,A1,A2,O,S,Co);
-  cn(A,0,X1,0); cn(B,0,X1,1);
-  cn(X1,0,X2,0); cn(Ci,0,X2,1);
-  cn(X1,0,A1,0); cn(Ci,0,A1,1);
-  cn(A,0,A2,0); cn(B,0,A2,1);
-  cn(A2,0,O,0); cn(A1,0,O,1);
-  cn(X2,0,S,0); cn(O,0,Co,0);
-  return {comps,wires};
+function exSR(C,W){
+  const s=C('SW',0,0,{label:'S',state:1});
+  const r=C('SW',0,120,{label:'R'});
+  const n1=C('NOR',160,0,{label:'QBAR'});
+  const n2=C('NOR',160,120,{label:'Q'});
+  W(s,0,n1,0); W(n1,0,n2,0); W(n2,0,n1,1); W(r,0,n2,1);
+  const lq=C('LEDG',320,120,{label:'Q'});
+  const lb=C('LEDR',320,0,{label:'QBAR'});
+  W(n2,0,lq,0); W(n1,0,lb,0);
 }
-function buildSR(){
-  comps=[]; wires=[];
-  const S=mkComp('SW',120,160,{label:'S',state:1});
-  const R=mkComp('SW',120,480,{label:'R'});
-  const N1=mkComp('NOR',400,180,{label:'NOR-A'});
-  const N2=mkComp('NOR',400,440,{label:'NOR-B'});
-  const Q=mkComp('LEDG',660,180,{label:'Q'});
-  const Qb=mkComp('LEDR',660,440,{label:'nQ'});
-  comps.push(S,R,N1,N2,Q,Qb);
-  cn(S,0,N1,0); cn(N2,0,N1,1);
-  cn(R,0,N2,0); cn(N1,0,N2,1);
-  cn(N1,0,Q,0); cn(N2,0,Qb,0);
-  return {comps,wires};
+function exMajority(C,W){
+  const a=C('SW',0,-40,{label:'A'});
+  const b=C('SW',0,30,{label:'B'});
+  const c=C('SW',0,100,{label:'C'});
+  const g1=C('AND',180,-5);
+  const g2=C('AND',180,65);
+  const g3=C('AND',180,135);
+  const g4=C('OR3',340,65,{label:'MAJ'});
+  const led=C('LEDG',480,65,{label:'MAJ'});
+  W(a,0,g1,0); W(b,0,g1,1);
+  W(b,0,g2,0); W(c,0,g2,1);
+  W(a,0,g3,0); W(c,0,g3,1);
+  W(g1,0,g4,0); W(g2,0,g4,1); W(g3,0,g4,2);
+  W(g4,0,led,0);
 }
-function buildMUX(){
-  comps=[]; wires=[];
-  const S=mkComp('SW',120,160,{label:'SEL'});
-  const A=mkComp('SW',120,320,{label:'A',state:1});
-  const B=mkComp('SW',120,480,{label:'B'});
-  const N=mkComp('NOT',360,160,{label:'NOT'});
-  const A1=mkComp('AND',620,260,{label:'AND1'});
-  const A2=mkComp('AND',620,420,{label:'AND2'});
-  const O=mkComp('OR',860,340,{label:'OR'});
-  const Y=mkComp('LEDY',980,340,{label:'Y'});
-  comps.push(S,A,B,N,A1,A2,O,Y);
-  cn(S,0,N,0);
-  cn(N,0,A1,0); cn(A,0,A1,1);
-  cn(S,0,A2,0); cn(B,0,A2,1);
-  cn(A1,0,O,0); cn(A2,0,O,1);
-  cn(O,0,Y,0);
-  return {comps,wires};
+function exWide(C,W){
+  const sw=[-45,-15,15,45].map((y,k)=>C('SW',0,y,{label:'ABCD'[k]}));
+  const a4=C('AND4',230,0,{label:'ALL'});
+  const n4=C('NOR4',230,120,{label:'NONE'});
+  const o3=C('OR3',230,240,{label:'ANY'});
+  const l1=C('LEDG',400,0);
+  const l2=C('LEDR',400,120);
+  const l3=C('LEDY',400,240);
+  sw.forEach((s,k)=>{ W(s,0,a4,k); W(s,0,n4,k); });
+  W(sw[0],0,o3,0); W(sw[1],0,o3,1); W(sw[2],0,o3,2);
+  W(a4,0,l1,0); W(n4,0,l2,0); W(o3,0,l3,0);
 }
-function buildDFF(){
-  comps=[]; wires=[];
-  const D=mkComp('SW',120,160,{label:'D',state:1});
-  const C=mkComp('CLK',120,300,{label:'CLK',period:1000});
-  const P=mkComp('SW',120,460,{label:'PRE'});
-  const R=mkComp('SW',120,600,{label:'CLR'});
-  const F=mkComp('DFF',400,380,{label:'FF1'});
-  const Q=mkComp('LEDG',660,320,{label:'Q'});
-  const Qn=mkComp('LEDR',660,480,{label:'nQ'});
-  comps.push(D,C,P,R,F,Q,Qn);
-  cn(D,0,F,0); cn(C,0,F,1); cn(P,0,F,2); cn(R,0,F,3);
-  cn(F,0,Q,0); cn(F,1,Qn,0);
-  return {comps,wires};
+const EXAMPLES=[
+  {name:'Clock divider',    desc:'3 flip-flops ÷2 ÷4 ÷8 · EN gate freezes the count', build:exDivider},
+  {name:'SR latch',         desc:'cross-coupled NORs with S / R switches',            build:exSR},
+  {name:'Majority-of-3',    desc:'three ANDs feeding an OR ×3',                       build:exMajority},
+  {name:'3/4-input gates',  desc:'AND ×4 · NOR ×4 · OR ×3 demo',                      build:exWide},
+];
+function loadExample(ex, undoable){
+  if(undoable!==false) pushHist();
+  comps=[]; wires=[]; idC=1; idW=1;
+  const C=(type,x,y,extra={})=>{ const c=mkComp(type,x,y,extra); comps.push(c); return c; };
+  const W=(f,fi,t,ti)=>{ wires.push({id:wid(), from:{c:f.id,t:'out',i:fi}, to:{c:t.id,t:'in',i:ti}}); };
+  ex.build(C,W);
+  reindex();
+  selClear(); placing=null; pendingWire=null; syncPalette(); updateStatusUI();
+  markDirty(); updateCounts(); updateInspector(); zoomFit();
 }
-function buildShift(){
-  comps=[]; wires=[];
-  const C=mkComp('CLK',120,180,{label:'CLK',period:500});
-  const IN=mkComp('SW',120,340,{label:'IN',state:1});
-  const F0=mkComp('DFF',400,180,{label:'FF0'});
-  const F1=mkComp('DFF',560,180,{label:'FF1'});
-  const F2=mkComp('DFF',720,180,{label:'FF2'});
-  const F3=mkComp('DFF',880,180,{label:'FF3'});
-  const L0=mkComp('LEDG',400,420,{label:'Q0'});
-  const L1=mkComp('LEDG',560,420,{label:'Q1'});
-  const L2=mkComp('LEDG',720,420,{label:'Q2'});
-  const L3=mkComp('LEDG',880,420,{label:'Q3'});
-  comps.push(C,IN,F0,F1,F2,F3,L0,L1,L2,L3);
-  cn(IN,0,F0,0);
-  cn(C,0,F0,1); cn(C,0,F1,1); cn(C,0,F2,1); cn(C,0,F3,1);
-  cn(F0,0,F1,0); cn(F1,0,F2,0); cn(F2,0,F3,0);
-  cn(F0,0,L0,0); cn(F1,0,L1,0); cn(F2,0,L2,0); cn(F3,0,L3,0);
-  return {comps,wires};
-}
-function buildDiv(){
-  comps=[]; wires=[];
-  const C=mkComp('CLK',120,120,{label:'CLK',period:500});
-  const EN=mkComp('SW',120,340,{label:'EN',state:1});
-  const F0=mkComp('TFF',400,180,{label:'FF0'});
-  const F1=mkComp('TFF',620,180,{label:'FF1'});
-  const F2=mkComp('TFF',840,180,{label:'FF2'});
-  const D0=mkComp('LEDR',400,420,{label:'/2'});
-  const D1=mkComp('LEDY',620,420,{label:'/4'});
-  const D2=mkComp('LEDG',840,420,{label:'/8'});
-  comps.push(C,EN,F0,F1,F2,D0,D1,D2);
-  cn(C,0,F0,1);
-  cn(F0,1,F1,1); cn(F1,1,F2,1);
-  cn(EN,0,F0,0); cn(EN,0,F1,0); cn(EN,0,F2,0);
-  cn(F0,0,D0,0); cn(F1,0,D1,0); cn(F2,0,D2,0);
-  return {comps,wires};
-}
-const EXAMPLES={
-  blank:{name:'Blank',desc:'Start from an empty canvas',build:()=>({comps:[],wires:[]})},
-  half:{name:'Half adder',desc:'XOR + AND — gates only',build:buildHalf},
-  full:{name:'Full adder',desc:'1-bit adder with carry-in / carry-out',build:buildFull},
-  sr:{name:'SR latch (from NOR gates)',desc:'Cross-coupled NORs — feedback & memory',build:buildSR},
-  mux:{name:'2-to-1 MUX',desc:'Selector routes A or B to the output',build:buildMUX},
-  dff:{name:'D flip-flop intro',desc:'D, CLK, PRE and CLR wired to switches',build:buildDFF},
-  shift:{name:'4-bit shift register',desc:'Four D flip-flops, one clock — flip IN and watch bits march',build:buildShift},
-  div:{name:'Frequency divider ÷8',desc:'Three T flip-flops ripple-count — the default circuit',build:buildDiv},
-};
-function loadExample(key){
-  const ex=EXAMPLES[key]; if(!ex) return;
-  pushHist();
-  const b=ex.build();
-  comps=b.comps; wires=b.wires;
-  reindex(); selClear(); cancelModes();
-  markDirty(); updateCounts(); zoomFit();
-  toast('Loaded: '+ex.name,'ok');
-}
-
-/* ---------------- toolbar ---------------- */
-function initToolbar(){
-  $('#icNew').innerHTML=icon('file'); $('#icEx').innerHTML=icon('layers');
-  $('#icImp').innerHTML=icon('up');   $('#icExp').innerHTML=icon('down');
-  $('#icTt').innerHTML=icon('table');
-  $('#btnUndo').innerHTML=icon('undo'); $('#btnRedo').innerHTML=icon('redo');
-  $('#btnHelp').innerHTML=icon('help');
-  $('#btnFit').innerHTML=icon('fit');
-  $('#inspClose').innerHTML=icon('x'); $('#hintClose').innerHTML=icon('x');
-
-  const menu=$('#exMenu');
-  for(const k in EXAMPLES){
+function buildExamples(){
+  const m=$('#exMenu'); m.innerHTML='';
+  EXAMPLES.forEach(ex=>{
     const b=document.createElement('button');
     b.className='m-item';
-    b.innerHTML=esc(EXAMPLES[k].name)+`<small>${esc(EXAMPLES[k].desc)}</small>`;
-    b.addEventListener('click',()=>{ menu.classList.remove('open'); loadExample(k); });
-    menu.appendChild(b);
-  }
-  $('#btnEx').addEventListener('click',e=>{ e.stopPropagation(); menu.classList.toggle('open'); });
-  $('#btnNew').addEventListener('click',()=>{
-    confirmBox('Clear canvas','Remove all components and wires? You can undo this afterwards.','Clear',
-      ()=>{ pushHist(); comps=[]; wires=[]; reindex(); selClear(); cancelModes(); markDirty(); updateCounts(); });
+    b.innerHTML=esc(ex.name)+'<small>'+esc(ex.desc)+'</small>';
+    b.addEventListener('click', ()=>{ $('#exMenu').classList.remove('open'); loadExample(ex, true); });
+    m.appendChild(b);
   });
-  $('#btnUndo').addEventListener('click',doUndo);
-  $('#btnRedo').addEventListener('click',doRedo);
-  $('#btnImport').addEventListener('click',()=>$('#fileIn').click());
-  $('#btnExport').addEventListener('click',()=>{
+}
+
+/* ---------------- new / import / export ---------------- */
+function newCircuitDialog(){
+  openModal('<div class="m-title">New circuit</div>'
+    +'<div class="m-body">Discard the current circuit and start from an empty canvas? You can undo this with Ctrl+Z.</div>'
+    +'<div class="m-actions"><button class="btn" id="mCancel">Cancel</button>'
+    +'<button class="btn danger" id="mOk">New circuit</button></div>');
+  $('#mCancel').addEventListener('click', closeModal);
+  $('#mOk').addEventListener('click', ()=>{
+    pushHist();
+    comps=[]; wires=[]; reindex();
+    selClear(); placing=null; pendingWire=null; syncPalette(); updateStatusUI();
+    markDirty(); updateCounts(); updateInspector(); closeModal();
+    toast('New circuit','ok');
+  });
+}
+function exportJSON(){
+  try{
     const blob=new Blob([serialize()],{type:'application/json'});
     const a=document.createElement('a');
-    a.href=URL.createObjectURL(blob); a.download='gatelab-circuit.json'; a.click();
-    setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+    a.href=URL.createObjectURL(blob);
+    a.download='gatelab-circuit.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
     toast('Circuit exported','ok');
-  });
-  $('#fileIn').addEventListener('change',e=>{
-    const f=e.target.files[0]; e.target.value='';
-    if(!f) return;
-    const rd=new FileReader();
-    rd.onload=()=>{
-      try{
-        pushHist();
-        const d=loadData(rd.result);
-        zoomFit();
-        toast('Imported '+d.comps.length+' components'+(d.dropped?' ('+d.dropped+' invalid wires removed)':''),'ok');
-      }catch(err){ toast('Import failed: '+err.message,'err'); }
-    };
-    rd.onerror=()=>toast('Could not read that file','err');
-    rd.readAsText(f);
-  });
-  $('#btnTruth').addEventListener('click',openTruth);
-  $('#btnHelp').addEventListener('click',openHelp);
-  $('#btnFit').addEventListener('click',zoomFit);
-  $('#btnLabels').addEventListener('click',()=>{
-    showLabels=!showLabels;
-    $('#btnLabels').classList.toggle('on',showLabels);
-  });
-  $('#hintClose').addEventListener('click',()=>{ $('#hint').hidden=true; });
+  }catch(err){ toast('Export failed: '+(err&&err.message?err.message:err),'err'); }
+}
+function onImportFile(e){
+  const f=e.target.files && e.target.files[0];
+  e.target.value='';
+  if(!f) return;
+  const rd=new FileReader();
+  rd.onload=()=>{
+    try{
+      pushHist();
+      loadData(String(rd.result));
+      zoomFit(); updateInspector();
+      toast('Imported '+f.name,'ok');
+    }catch(err){
+      toast('Import failed: '+(err&&err.message?err.message:err),'err');
+    }
+  };
+  rd.readAsText(f);
+}
+
+/* ---------------- help ---------------- */
+function openHelp(){
+  openModal(
+    '<div class="m-title">GATELAB — quick reference</div>'
+    +'<div class="m-body">Drop parts from the left palette onto the canvas, wire them pin-to-pin, and watch signals flow. '
+    +'Tap a palette part once to enter place mode (click the canvas repeatedly to stamp copies — Shift keeps the tool), '
+    +'or drag it straight onto the canvas. Select a single gate and press T for its truth table.</div>'
+    +'<div class="m-cols"><div><h4>Mouse &amp; touch</h4><ul>'
+    +'<li>Drag a part from the palette, or tap it then tap the canvas</li>'
+    +'<li>Swipe up / down on the palette to scroll it · tap a heading to fold or unfold a section</li>'
+    +'<li>Drag from an output pin to an input pin to create a wire</li>'
+    +'<li>Click a switch to flip it</li>'
+    +'<li>Tap a wire to select it — then tap the ✕ on it, or double-tap the wire, to delete just that wire</li>'
+    +'<li>Drag to move · Shift-click or marquee to multi-select</li>'
+    +'<li>Right-drag, middle-drag or Space+drag to pan · wheel zooms · pinch on touch</li>'
+    +'</ul></div><div><h4>Keys</h4><table class="keys">'
+    +'<tr><td><kbd>Del</kbd></td><td>delete selection (wires too)</td></tr>'
+    +'<tr><td><kbd>R</kbd></td><td>rotate</td></tr>'
+    +'<tr><td><kbd>F</kbd></td><td>zoom to fit</td></tr>'
+    +'<tr><td><kbd>T</kbd></td><td>truth table</td></tr>'
+    +'<tr><td><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Shift+Z</kbd></td><td>undo / redo</td></tr>'
+    +'<tr><td><kbd>Ctrl+D</kbd></td><td>duplicate</td></tr>'
+    +'<tr><td><kbd>Ctrl+A</kbd></td><td>select all</td></tr>'
+    +'<tr><td><kbd>Ctrl+S</kbd></td><td>save now</td></tr>'
+    +'<tr><td><kbd>Esc</kbd></td><td>cancel / deselect</td></tr>'
+    +'</table></div></div>'
+    +'<div class="foot-note">Everything runs locally in your browser; the circuit auto-saves to localStorage. '
+    +availableGateSummary()+'</div>'
+    +'<div class="m-actions"><button class="btn" id="mClose">Close</button></div>', true);
+  $('#mClose').addEventListener('click', closeModal);
+}
+function availableGateSummary(){
+  const wide=Object.keys(CAT).filter(t=>CAT[t].kind==='gate' && CAT[t].ins>2)
+    .map(t=>CAT[t].name).join(', ');
+  return 'Available wide gates: '+wide+'.';
+}
+
+/* ---------------- animation loop ---------------- */
+function frame(ts){
+  flowPhase=(flowPhase+0.35)%13.5;
+  simulate(ts);
+  render(ts);
+  updateWireDel();          /* --- wire delete: ✕ tracks pan/zoom --- */
+  requestAnimationFrame(frame);
 }
 
 /* ---------------- boot self-test ---------------- */
 function selfTest(){
-  const saveC=comps, saveW=wires;
-  try{
-    const g=(t,i)=>({id:'_t',type:t,in:i,out:[0,0],q:0,pc:0,fresh:true,state:0,period:1000,x:0,y:0,rot:0,label:''});
-    const E=(t,i)=>evalComp(g(t,i))[0];
-    const cases=[
-      ['AND',[1,1],1],['AND',[1,0],0],['OR',[0,1],1],['OR',[0,0],0],
-      ['NAND',[1,1],0],['NOR',[0,0],1],['XOR',[1,0],1],['XNOR',[1,0],0],
-      ['NOT',[1],0],['NOT',[0],1],['BUF',[0],0]
-    ];
-    for(const [t,i,want] of cases){
-      const got=E(t,i);
-      if(got!==want) throw new Error('engine self-test failed: '+t+'('+i+') returned '+got+', expected '+want);
-    }
-    const f=g('DFF',[1,1,0,0]); f.fresh=false; f.pc=0; f.q=0;
-    comps=[f]; edgePhase();
-    if(f.q!==1) throw new Error('engine self-test failed: D flip-flop did not sample D on a rising edge');
-    const j=g('JKFF',[1,1,1,0]); j.fresh=false; j.pc=0; j.q=0;
-    comps=[j]; edgePhase();
-    if(j.q!==1) throw new Error('engine self-test failed: JK toggle');
-    const tt=g('TFF',[1,1,0,0]); tt.fresh=false; tt.pc=0; tt.q=1;
-    comps=[tt]; edgePhase();
-    if(tt.q!==0) throw new Error('engine self-test failed: T toggle');
-    console.log('%cGATELAB self-test OK — simulation engine verified','color:#3ecf7a');
-  }finally{
-    comps=saveC; wires=saveW; reindex();
-  }
+  const T=(type,bits)=>evalComp({type, in:bits, q:0, state:0, period:1000},0)[0];
+  const eq=(got,want,msg)=>{ if(got!==want) throw new Error('self-test: '+msg+' got '+got+' want '+want); };
+  eq(T('AND',[0,1]),0,'AND');  eq(T('AND',[1,1]),1,'AND');
+  eq(T('OR',[0,1]),1,'OR');    eq(T('NAND',[1,1]),0,'NAND');
+  eq(T('NOR',[0,0]),1,'NOR');  eq(T('XOR',[1,0]),1,'XOR');
+  eq(T('NOT',[0]),1,'NOT');    eq(T('NOT',[1]),0,'NOT');
+  eq(T('AND3',[1,1,1]),1,'AND3'); eq(T('AND3',[1,0,1]),0,'AND3');
+  eq(T('AND4',[1,1,1,1]),1,'AND4'); eq(T('AND4',[1,1,0,1]),0,'AND4');
+  eq(T('OR3',[0,0,1]),1,'OR3');  eq(T('OR3',[0,0,0]),0,'OR3');
+  eq(T('OR4',[0,0,0,1]),1,'OR4'); eq(T('OR4',[0,0,0,0]),0,'OR4');
+  eq(T('NAND3',[1,1,1]),0,'NAND3'); eq(T('NAND3',[0,1,1]),1,'NAND3');
+  eq(T('NAND4',[1,1,1,1]),0,'NAND4'); eq(T('NAND4',[1,1,1,0]),1,'NAND4');
+  eq(T('NOR3',[0,0,0]),1,'NOR3'); eq(T('NOR3',[0,0,1]),0,'NOR3');
+  eq(T('NOR4',[0,0,0,0]),1,'NOR4'); eq(T('NOR4',[1,0,0,0]),0,'NOR4');
 }
 
-/* ---------------- boot ---------------- */
-function init(){
-  selfTest();
-  initToolbar();
-  buildPalette();
-  syncPalette();
-  resize();
-  let loaded=false;
-  try{
-    const raw=localStorage.getItem(KEY);
-    if(raw){
-      const d=sanitize(JSON.parse(raw));
-      comps=d.comps; wires=d.wires; loaded=true;
-      if(d.dropped) toast('Removed '+d.dropped+' invalid wire(s) from the saved circuit','err');
-    }
-  }catch(e){ /* corrupt or unavailable storage → default example */ }
-  if(!loaded){
-    const b=buildDiv(); comps=b.comps; wires=b.wires;
-    $('#hint').hidden=false;
-  }
-  reindex(); updateCounts(); updateViewUI(); updateStatusUI(); refreshHistBtns();
-  zoomFit();
-}
-function frame(now){
-  flowPhase=(flowPhase+1.15)%100000;
-  simulate(now);
-  if(inspFor){
+/* ---------------- UI wiring + boot ---------------- */
+function wireUI(){
+  $('#btnNew').addEventListener('click', newCircuitDialog);
+  $('#btnEx').addEventListener('click', ()=>$('#exMenu').classList.toggle('open'));
+  $('#btnUndo').addEventListener('click', doUndo);
+  $('#btnRedo').addEventListener('click', doRedo);
+  $('#btnImport').addEventListener('click', ()=>$('#fileIn').click());
+  $('#btnExport').addEventListener('click', exportJSON);
+  $('#btnTruth').addEventListener('click', openTruth);
+  $('#btnHelp').addEventListener('click', openHelp);
+  $('#btnFit').addEventListener('click', zoomFit);
+  $('#btnLabels').addEventListener('click', ()=>{
+    showLabels=!showLabels;
+    $('#btnLabels').classList.toggle('on', showLabels);
+  });
+  $('#hintClose').addEventListener('click', ()=>{ $('#hint').hidden=true; });
+  $('#inspClose').addEventListener('click', ()=>selClear());
+  $('#inpLabel').addEventListener('input', e=>{
+    const c=byId.get(inspFor); if(!c) return;
+    c.label=e.target.value.slice(0,12); markDirty();
+  });
+  $('#inpSpeed').addEventListener('change', e=>{
     const c=byId.get(inspFor);
-    if(c && isSeq(c.type)){
-      const el=$('#inspQ'), v=c.out[0];
-      if(el.textContent!==String(v)){ el.textContent=String(v); el.style.color=v?'#f0a63c':'#8d897d'; }
+    if(c && c.type==='CLK'){ c.period=clamp(+e.target.value||1000,100,4000); markDirty(); }
+  });
+  $('#inspSet').addEventListener('click', ()=>{
+    const c=byId.get(inspFor);
+    if(c && isSeq(c.type)){ c.q=1; c.fresh=true; markDirty(); updateInspector(); }
+  });
+  $('#inspClr').addEventListener('click', ()=>{
+    const c=byId.get(inspFor);
+    if(c && isSeq(c.type)){ c.q=0; c.fresh=true; markDirty(); updateInspector(); }
+  });
+  $('#inspRot').addEventListener('click', rotateSel);
+  $('#inspDel').addEventListener('click', deleteSelection);
+  $('#wireDel').addEventListener('click', deleteSelectedWires);   /* --- wire delete --- */
+  $('#fileIn').addEventListener('change', onImportFile);
+}
+
+function boot(){
+  try{
+    $('#icNew').innerHTML=icon('file');
+    $('#icEx').innerHTML=icon('layers');
+    $('#icImp').innerHTML=icon('up');
+    $('#icExp').innerHTML=icon('down');
+    $('#icTt').innerHTML=icon('table');
+    $('#btnHelp').innerHTML=icon('help');
+    $('#btnUndo').innerHTML=icon('undo');
+    $('#btnRedo').innerHTML=icon('redo');
+    $('#inspClose').innerHTML=icon('x');
+    $('#hintClose').innerHTML=icon('x');
+    $('#btnFit').innerHTML=icon('fit');
+    $('#wireDel').innerHTML=icon('x');       /* --- wire delete --- */
+
+    selfTest();
+    buildPalette();
+    buildExamples();
+    wireUI();
+
+    let restored=false;
+    try{
+      const s=localStorage.getItem(KEY);
+      if(s){ loadData(s); restored=true; }
+    }catch(err){ restored=false; }
+
+    if(!restored){
+      loadExample(EXAMPLES[0], false);
+      $('#hint').hidden=false;
     }
+    zoomFit();
+
+    updateCounts(); updateViewUI(); updateStatusUI(); updateInspector();
+    requestAnimationFrame(frame);
+  }catch(err){
+    fatal(err && (err.stack||err.message) || String(err));
   }
-  render(now);
-  requestAnimationFrame(frame);
 }
-try{
-  init();
-  requestAnimationFrame(frame);
-}catch(err){
-  fatal('boot failed: '+(err && err.message ? err.message : String(err)));
-}
+boot();
 </script>
 </body>
 </html>
