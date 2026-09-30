@@ -1423,7 +1423,7 @@ function showCircuitTruth(){
     return msg('Truth table — whole circuit',
       'This circuit contains a clock or flip-flops, so its outputs depend on time as well as on the switches. Select a single gate instead, or build a purely combinational circuit (switches → gates → LEDs) to table the whole thing.');
   const sws=comps.filter(c=>c.type==='SW').sort(labelSort);
-  const leds=comps.filter(isLED).sort(labelSort);
+  const leds=comps.filter(c=>isLED(c.type)).sort(labelSort);
   if(!sws.length || !leds.length)
     return msg('Truth table — whole circuit','A whole-circuit truth table needs at least one switch (input) and one LED (output).');
   if(sws.length>8)
